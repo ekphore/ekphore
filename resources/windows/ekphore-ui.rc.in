@@ -1,0 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Gauvain "GovanifY" Roussel-Tarbouriech <gauvain@govanify.com>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Explorer and the taskbar take the first icon resource
+1 ICON "@EKPHORE_ICO@"

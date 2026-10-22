@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Gauvain "GovanifY" Roussel-Tarbouriech <gauvain@govanify.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+---
+BasedOnStyle: LLVM
+AlignAfterOpenBracket: DontAlign
+AlignOperands: Align
+ContinuationIndentWidth: '8'
+BreakStringLiterals: 'false'
+CommentPragmas: '^ (IWYU pragma:|SPDX-)'
+AllowShortBlocksOnASingleLine: 'true'
+AlwaysBreakAfterDefinitionReturnType: None
+AlwaysBreakAfterReturnType: None
+Cpp11BracedListStyle: 'false'
+IndentWidth: '4'
+SortIncludes: 'true'
+SpacesInCStyleCastParentheses: 'false'
+SpacesInContainerLiterals: 'false'
+SpacesInParentheses: 'false'
+UseTab: Never
+AlwaysBreakTemplateDeclarations: 'Yes'
+IndentCaseLabels: 'true'
+
+...

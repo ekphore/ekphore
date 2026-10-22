@@ -1,0 +1,270 @@
+# SPDX-FileCopyrightText: 2026 Gauvain "GovanifY" Roussel-Tarbouriech <gauvain@govanify.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependencies:
+    name: Check private dependency access
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify read access to the three libraries
+        env:
+          GH_TOKEN: ${{ secrets.EKPHORE_DEPENDENCIES_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Set EKPHORE_DEPENDENCIES_TOKEN in this repository's Actions secrets. It needs Contents: read-only access to ekphore/libnki, ekphore/libksp and ekphore/libnks. The default GITHUB_TOKEN cannot read other private repositories."
+            exit 1
+          fi
+          for library in libnki libksp libnks; do
+            if ! gh api "repos/ekphore/$library/contents/CMakeLists.txt" --silent; then
+              echo "::error::EKPHORE_DEPENDENCIES_TOKEN cannot read ekphore/$library. Check its repository selection, Contents permission, expiration and organization approval."
+              exit 1
+            fi
+          done
+
+  linux:
+    needs: dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ekphore
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ekphore/libnki
+          path: libnki
+          token: ${{ secrets.EKPHORE_DEPENDENCIES_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ekphore/libksp
+          path: libksp
+          token: ${{ secrets.EKPHORE_DEPENDENCIES_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ekphore/libnks
+          path: libnks
+          token: ${{ secrets.EKPHORE_DEPENDENCIES_TOKEN }}
+          persist-credentials: false
+      - name: Build and check Linux standalone and plugins in Docker
+        run: |
+          docker build --target runtime --build-arg BUILD_JOBS=2 \
+            -t ekphore-linux -f ekphore/cmake/ci/Dockerfile .
+          docker run --rm --network none --read-only --tmpfs /tmp \
+            -e HOME=/tmp/home --cap-drop=ALL \
+            --security-opt=no-new-privileges ekphore-linux
+          docker build --target artifacts --output type=local,dest=artifacts \
+            -f ekphore/cmake/ci/Dockerfile .
+          tar -C artifacts -czf ekphore-linux-x86_64.tar.gz .
+      - uses: actions/upload-artifact@v7
+        with:
+          archive: false
+          path: ekphore-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    needs: dependencies
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
+      VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
+      VCPKG_BINARY_SOURCES: clear;default,readwrite
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ekphore
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ekphore/libnki
+          path: libnki
+          token: ${{ secrets.EKPHORE_DEPENDENCIES_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ekphore/libksp
+          path: libksp
+          token: ${{ secrets.EKPHORE_DEPENDENCIES_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ekphore/libnks
+          path: libnks
+          token: ${{ secrets.EKPHORE_DEPENDENCIES_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Identify dependency toolchain
+        id: toolchain
+        shell: pwsh
+        run: |
+          $revision = git -C "$env:VCPKG_INSTALLATION_ROOT" rev-parse HEAD
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "cache_id=$($env:ImageOS)-$($env:ImageVersion)-$revision" >> $env:GITHUB_OUTPUT
+      - name: Restore vcpkg packages and downloads
+        id: vcpkg_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/vcpkg
+          key: windows-2022-x64-windows-static-v1-${{ steps.toolchain.outputs.cache_id }}-${{ hashFiles('ekphore/.github/workflows/build.yml') }}
+          restore-keys: |
+            windows-2022-x64-windows-static-v1-${{ steps.toolchain.outputs.cache_id }}-
+            windows-2022-x64-windows-static-v1-
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install cmake==3.31.10 ninja
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE, $env:VCPKG_DOWNLOADS | Out-Null
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install `
+            libsndfile libpng sqlite3 tiff freetype openssl zlib libusb sdl3 `
+            --triplet x64-windows-static
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Save vcpkg packages and downloads
+        if: steps.vcpkg_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/vcpkg
+          key: ${{ steps.vcpkg_cache.outputs.cache-primary-key }}
+      - name: Build standalone, VST3 and CLAP
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath
+          & "$vs/Common7/Tools/Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          $fftw = "$env:GITHUB_WORKSPACE/ekphore/build/fftw"
+          cmake "-DFFTW_ROOT=$fftw" -P ekphore/cmake/ci/WindowsFFTW.cmake
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake -S ekphore -B ekphore/build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DSMTG_USE_STATIC_CRT=ON `
+            -DBUILD_SHARED_LIBS=OFF -DEKPHORE_BUILD_CLAP=ON -DEKPHORE_BUILD_VST3=ON `
+            -DEKPHORE_BUILD_LV2=OFF -DEKPHORE_BUILD_AU=OFF -DEKPHORE_BUILD_STANDALONE_UI=ON `
+            -DLIBNKS_BUILD_EXAMPLES=OFF -DLIBNKI_BUNDLED_KEY_PATH= `
+            -DEKPHORE_BUNDLE_UNSUPPORTED_KONTAKT_FONTS=OFF `
+            "-DEKPHORE_NATIVE_GRAIN_FFTW_INCLUDE_DIR=$fftw/install/include" `
+            "-DEKPHORE_NATIVE_GRAIN_FFTW_LIBRARY=$fftw/install/lib/fftw3f.lib" `
+            -DEKPHORE_NATIVE_GRAIN_FFTW_REUSE_CONTRACT=ON
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build ekphore/build --parallel 2 --target ekphore-ui ekphore-clap ekphore-vst3 nksd -- -k 0
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ekphore/build/ekphore-ui.exe --help
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python ekphore/cmake/ci/stage.py ekphore/build artifacts --standalone --formats clap vst3 `
+            "--dependency-prefix=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python ekphore/cmake/ci/bundle.py artifacts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $package = Join-Path $env:RUNNER_TEMP 'ekphore windows portable'
+          Move-Item artifacts $package
+          python ekphore/cmake/ci/bundle.py "$package" --verify-only --smoke
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Compress-Archive -Path "$package/*" -DestinationPath ekphore-windows-x86_64.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          archive: false
+          path: ekphore-windows-x86_64.zip
+          if-no-files-found: error
+
+  macos:
+    needs: dependencies
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ekphore
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ekphore/libnki
+          path: libnki
+          token: ${{ secrets.EKPHORE_DEPENDENCIES_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ekphore/libksp
+          path: libksp
+          token: ${{ secrets.EKPHORE_DEPENDENCIES_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ekphore/libnks
+          path: libnks
+          token: ${{ secrets.EKPHORE_DEPENDENCIES_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          brew install ninja pkg-config libsndfile libpng sqlite libtiff freetype openssl@3 libusb webp sdl3
+          python -m pip install cmake==3.31.10
+      - name: Build standalone, AU, CLAP and VST3
+        run: |
+          cmake -S ekphore -B ekphore/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix openssl@3);$(brew --prefix sqlite)" \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DEKPHORE_BUILD_CLAP=ON -DEKPHORE_BUILD_VST3=ON -DEKPHORE_BUILD_AU=ON \
+            -DEKPHORE_BUILD_LV2=OFF -DEKPHORE_BUILD_STANDALONE_UI=ON \
+            -DLIBNKS_BUILD_EXAMPLES=OFF -DLIBNKI_BUNDLED_KEY_PATH= \
+            -DEKPHORE_BUNDLE_UNSUPPORTED_KONTAKT_FONTS=OFF
+          cmake --build ekphore/build --parallel 3 --target ekphore-ui ekphore-au ekphore-clap ekphore-vst3 nksd
+          ekphore/build/ekphore-ui --help
+          python ekphore/cmake/ci/stage.py ekphore/build artifacts --standalone --formats au clap vst3
+          python ekphore/cmake/ci/bundle.py artifacts
+          mv artifacts "$RUNNER_TEMP/ekphore-macos"
+          python ekphore/cmake/ci/bundle.py "$RUNNER_TEMP/ekphore-macos" --verify-only --smoke
+          tar -C "$RUNNER_TEMP/ekphore-macos" -czf ekphore-macos.tar.gz .
+      - uses: actions/upload-artifact@v7
+        with:
+          archive: false
+          path: ekphore-macos.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [linux, windows, macos]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # v8 is the first download-artifact that understands archive: false uploads,
+      # but it still unzips anything that's a zip, so keep downloads as-is or the
+      # windows archive explodes into dist/
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+          skip-decompress: true
+      - name: Create the release from the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          ls -l
+          sha256sum ekphore-* > SHA256SUMS
+          # v1.2.0-rc1 and similar tags become prereleases, shown as Preview on the website
+          prerelease=
+          case "$TAG" in *-*) prerelease=--prerelease ;; esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "ekphore $TAG" --generate-notes $prerelease \
+            ekphore-linux-x86_64.tar.gz ekphore-windows-x86_64.zip ekphore-macos.tar.gz SHA256SUMS

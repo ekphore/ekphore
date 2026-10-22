@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ekphore
+GenericName=Sampler
+Comment=The Open Source Sampler
+Exec=ekphore-ui
+Icon=io.github.ekphore
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+StartupWMClass=io.github.ekphore

@@ -148,6 +148,18 @@ file(WRITE "${EKPHORE_EMBEDDED_FONTS}"
     "${EKPHORE_PRIVATE_FONT_DECLARATIONS}"
     "}\n")
 
+# the welcome screen draws the logo, so keep it in every plug-in/standalone binary
+set(EKPHORE_WELCOME_LOGO "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/ekphore-logo.png")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${EKPHORE_WELCOME_LOGO}")
+file(READ "${EKPHORE_WELCOME_LOGO}" EKPHORE_WELCOME_LOGO_HEX HEX)
+string(REGEX REPLACE "(..)" "0x\\1," EKPHORE_WELCOME_LOGO_BYTES "${EKPHORE_WELCOME_LOGO_HEX}")
+file(WRITE "${EKPHORE_GENERATED_DIR}/embedded_logo.h.in"
+    "#pragma once\nnamespace ekphore::embedded_logo {\n"
+    "inline constexpr unsigned char png[] = {${EKPHORE_WELCOME_LOGO_BYTES}};\n"
+    "}\n")
+configure_file("${EKPHORE_GENERATED_DIR}/embedded_logo.h.in"
+    "${EKPHORE_GENERATED_DIR}/embedded_logo.h" COPYONLY)
+
 # Optional local Lumen face, kept under the same non-distributable validation
 # policy as the classic fonts. Public builds retain the portable fallback.
 if(EKPHORE_BUNDLE_UNSUPPORTED_KONTAKT_FONTS AND EXISTS

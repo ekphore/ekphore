@@ -4,6 +4,7 @@
 #include "browser.h"
 #include "../sampling/audio_file.h"
 #include "embedded_fonts.h"
+#include "embedded_logo.h"
 #include "native/renderer.h"
 #include <ekphore/nks.h>
 #include <libnki/model.h>
@@ -371,6 +372,49 @@ class Painter {
             }
     }
 };
+
+constexpr int welcome_logo_size = 128;
+
+const UiImage &welcome_logo(float scale) {
+    static const auto source = artwork_png(std::as_bytes(
+            std::span<const unsigned char>(embedded_logo::png)));
+    thread_local std::shared_ptr<UiImage> cached;
+    const auto size = std::uint32_t(std::lround(welcome_logo_size * scale));
+    if (cached && cached->width == size)
+        return *cached;
+    auto logo = std::make_shared<UiImage>();
+    logo->width = logo->height = size;
+    logo->rgba.resize(std::size_t(size) * size * 4);
+    if (source && source->width && source->height) {
+        const auto sw = source->width, sh = source->height;
+        for (std::uint32_t y = 0; y < size; ++y)
+            for (std::uint32_t x = 0; x < size; ++x) {
+                const auto x0 = x * sw / size, y0 = y * sh / size;
+                const auto x1 = std::max(x0 + 1, (x + 1) * sw / size);
+                const auto y1 = std::max(y0 + 1, (y + 1) * sh / size);
+                // premultiply, or transparent corners bleed black into the edge
+                double sum[4]{};
+                for (auto sy = y0; sy < y1; ++sy)
+                    for (auto sx = x0; sx < x1; ++sx) {
+                        const auto *px =
+                                &source->rgba[(std::size_t(sy) * sw + sx) * 4];
+                        const double a = px[3] / 255.0;
+                        for (int i = 0; i < 3; ++i)
+                            sum[i] += px[i] * a;
+                        sum[3] += a;
+                    }
+                auto *dst = &logo->rgba[(std::size_t(y) * size + x) * 4];
+                const double count = double(x1 - x0) * (y1 - y0);
+                for (int i = 0; i < 3; ++i)
+                    dst[i] = sum[3] > 0 ?
+                            std::uint8_t(std::lround(sum[i] / sum[3])) :
+                            0;
+                dst[3] = std::uint8_t(std::lround(sum[3] / count * 255));
+            }
+    }
+    cached = std::move(logo);
+    return *cached;
+}
 } // namespace
 
 fs::path config_path(Platform platform, const Environment &env) {
@@ -1291,10 +1335,8 @@ UiFrame View::render(float scale, bool caret_visible) const {
         return std::move(p.frame);
     }
     if (folder.empty()) {
-        p.rect(438, 160, 224, 108, 0x302735, 28);
-        for (int i = 0; i < 7; ++i)
-            p.rect(474 + i * 22, 195 - std::abs(3 - i) * 4, 8,
-                    42 + std::abs(3 - i) * 8, 0xd7bfdd, 4);
+        p.image(welcome_logo(p.scale), 550 - welcome_logo_size / 2, 150,
+                welcome_logo_size, welcome_logo_size);
         p.centered_text("Welcome to ekphore.", 100, 304, 900, 34, 0xf5f0f6);
         p.centered_text("Select the folder containing your instruments.", 100,
                 362, 900, 15, 0xbeb3c4);

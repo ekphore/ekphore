@@ -37,3 +37,7 @@
 !agents/ekphore/docker/Smoke.cmake
 !agents/ekphore/tests/
 !agents/ekphore/tests/linux_plugin_host.cpp
+ekphore/build
+libnki/build
+libnks/build
+libksp/build

@@ -105,8 +105,12 @@ def elf(path):
 
 
 def host_library(name):
+    # libstdc++ and libgcc_s come from the host too: mesa's GL/vulkan drivers are
+    # built against the distro's newer libstdc++, and once our older copy is loaded
+    # they fail to dlopen, which leaves SDL with no renderer at all on wayland
     return bool(re.fullmatch(
-        r'(lib(c|m|dl|pthread|rt|resolv|util|anl|BrokenLocale|nss_[\w]+)\.so\.[\d.]+|ld-linux[^/]*\.so\.[\d.]+)', name))
+        r'(lib(c|m|dl|pthread|rt|resolv|util|anl|BrokenLocale|nss_[\w]+)\.so\.[\d.]+|ld-linux[^/]*\.so\.[\d.]+'
+        r'|libstdc\+\+\.so\.6|libgcc_s\.so\.1)', name))
 
 
 def loaded(image):

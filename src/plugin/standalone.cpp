@@ -138,21 +138,22 @@ class Window {
                       << '\n';
             return false;
         }
-        window = SDL_CreateWindow(document.title.c_str(), document.width,
-                document.height,
-                SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
-                        SDL_WINDOW_HIDDEN);
-        if (!window) {
-            std::cerr << "Window creation failed: " << SDL_GetError() << '\n';
-            return false;
+        bool created = create_window(document);
+        // wayland can't put a software framebuffer on screen, so without a GL,
+        // EGL or vulkan library we can load there's nothing to draw with. X11
+        // can, so go through XWayland unless someone picked a driver themselves
+        if (!created && window && current_video_driver() == "wayland" &&
+                !SDL_GetHint(SDL_HINT_VIDEO_DRIVER)) {
+            std::cerr << "No Wayland renderer (" << SDL_GetError()
+                      << "), retrying with X11\n";
+            SDL_DestroyWindow(window);
+            window = nullptr;
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+            (void)SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
+            created = SDL_InitSubSystem(SDL_INIT_VIDEO) && create_window(document);
         }
-        set_window_icon(window);
-        resize(document);
-        SDL_SetWindowPosition(
-                window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-        renderer = SDL_CreateRenderer(window, nullptr);
-        if (!renderer) {
-            std::cerr << "Renderer creation failed: " << SDL_GetError() << '\n';
+        if (!created) {
+            report_render_failure();
             return false;
         }
         // no vsync, it blocks input and the main loop already throttles
@@ -292,6 +293,35 @@ class Window {
     }
 
   private:
+    bool create_window(const ekphore::UiDocument &document) {
+        window = SDL_CreateWindow(document.title.c_str(), document.width,
+                document.height,
+                SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
+                        SDL_WINDOW_HIDDEN);
+        if (!window)
+            return false;
+        set_window_icon(window);
+        resize(document);
+        SDL_SetWindowPosition(
+                window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+        renderer = SDL_CreateRenderer(window, nullptr);
+        return renderer != nullptr;
+    }
+
+    static std::string_view current_video_driver() {
+        const char *name = SDL_GetCurrentVideoDriver();
+        return name ? name : "";
+    }
+
+    void report_render_failure() const {
+        std::cerr << (window ? "Renderer" : "Window") << " creation failed: "
+                  << SDL_GetError() << "\nvideo driver: "
+                  << current_video_driver() << ", render drivers:";
+        for (int i = 0; i < SDL_GetNumRenderDrivers(); ++i)
+            std::cerr << ' ' << SDL_GetRenderDriver(i);
+        std::cerr << '\n';
+    }
+
     float window_scale() const {
         const auto density = SDL_GetWindowPixelDensity(window);
         // Windows uses pixels for window sizes; macOS already uses points

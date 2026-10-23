@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev zlib1g-dev libusb-1.0-0-dev libx11-dev libwebp-dev \
     libasound2-dev libpulse-dev libxcursor-dev libxi-dev libxrandr-dev \
     libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev \
-    libgl1-mesa-dev libudev-dev libdbus-1-dev \
+    libgl1-mesa-dev libudev-dev libdbus-1-dev libdecor-0-dev \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 --branch release-3.2.28 https://github.com/libsdl-org/SDL.git /sdl \
     && cmake -S /sdl -B /sdl-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
